@@ -1,0 +1,407 @@
+#include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+#include<time.h>
+#define GENERATION 1000  //种群进化迭代次数
+#define POPULATION 200  //种群个体数
+#define EVALUATION_TIME 100  //每个个体评估次数
+#define STEP_TIME 200  //每次评估步数
+#define TRASH_NUM 50  //易拉罐个数
+#define GEN_LEN 243  //基因长度
+#define SIDE_LEN 10//正方形场地边长
+#define HIT -5  //撞墙得分
+#define SUC 10  //成功捡起易拉罐得分
+#define FAL -1  //拣取失败得分
+#define SELECTION_NUM 2 //锦标赛每次随机选取2个个体
+#define MUTATION_P 0.1//位点突变概率
+#define MUTATION_P1 0.001 //逆转突变的概率
+#define MUTATION_GEN_NUM 10 //突变基因数目 1-10
+typedef int (*Population_info)[243];
+void Creating_Machine();  //造物机
+Population_info Evolution_Machine(Population_info Pre_Population);  //进化机
+int* Evaluation_Machine(Population_info Pre_Population);  //评估机
+Population_info Multiplication_Machine(Population_info Pre_Population,int* Score);  //繁殖机
+void InitializeSpace(char (*Space)[SIDE_LEN]);//对给予的场地进行随机初始化
+void InitializeArray(int *);//初始化AveragScore数组为0
+int Evaluation_Unit(int *Individual);//评估单元，对单个个体进行一次评估
+int CheckEnvironment(int x,int y,char(*Space)[SIDE_LEN]);
+void TournamentSelection(int *Score,int *choice);//通过锦标赛选择 选择两个个体作为亲本
+void NodeMutation(Population_info Pre_Population); // 位点变异
+void ReverseMutation(Population_info Pre_Population); //逆转变异
+void Reverse(int head,int tail,int *individual); //对某一选定个体进行逆转变异
+//Simulation_Machine  //仿真机
+void Write_File(Population_info p){
+    FILE *fp;
+    fp=fopen("Population","w");
+    if(fp==NULL) exit(-1);
+    for(int i=0;i<POPULATION;i++){
+        for(int j=0;j<GEN_LEN;j++){
+            fprintf(fp,"%d ",p[i][j]);
+        }
+        fputc('\n',fp);
+    }
+    fclose(fp);
+}
+
+Population_info Read_File(){
+    Population_info p=(Population_info)malloc(POPULATION*GEN_LEN*sizeof(int));
+    FILE *fp;
+    fp=fopen("Population","r");
+    if(fp==NULL) exit(-2);
+    for(int i=0;i<POPULATION;i++){
+        for(int j=0;j<GEN_LEN;j++){
+            fscanf(fp,"%d",&p[i][j]);
+        }
+    }
+    fclose(fp);
+    return p;
+}
+
+void Creating_Machine(){
+    srand((unsigned long)time(NULL));
+    int Initial_Population[POPULATION][GEN_LEN];
+    for(int i=0;i<POPULATION;i++){
+        for(int j=0;j<GEN_LEN;j++){
+            Initial_Population[i][j]=rand()%7;
+        }
+    }
+    FILE *fp;
+    fp=fopen("Population","w");
+    if(fp==NULL) exit(-3);
+    for(int i=0;i<POPULATION;i++){
+        for(int j=0;j<GEN_LEN;j++){
+            fprintf(fp,"%d ",Initial_Population[i][j]);
+        }
+        fputc('\n',fp);
+    }
+    fclose(fp);
+}
+
+Population_info Evolution_Machine(Population_info Pre_Population){
+    Population_info Post_Population;
+    int Max_Index=0;  //得分最高个体的下标
+    FILE *fp;
+    int* Score;//=(int*)malloc(POPULATION*sizeof(int));  //务必在内存中开辟数组空间
+    Score=Evaluation_Machine(Pre_Population);  //输入种群,输出各个体的分数
+    for(int i=0;i<POPULATION;i++){
+        if(Score[i]>Score[Max_Index]) Max_Index=i;
+    }
+    fp=fopen("Winner_Score","a");
+    if(fp==NULL) exit(-8);
+    fprintf(fp,"%d\n",Score[Max_Index]);
+    fclose(fp);
+    fp=fopen("Winner_Gene","a");
+    if(fp==NULL) exit(-5);
+    for(int i=0;i<GEN_LEN;i++){
+        fprintf(fp,"%d ",Pre_Population[Max_Index][i]);
+    }
+    fputc('\n',fp);
+    fclose(fp);
+    Post_Population=Multiplication_Machine(Pre_Population,Score);
+    return Post_Population;
+}
+int main(){
+    Creating_Machine();
+    Population_info Pre_Population;
+    Population_info Post_Population;
+    for(int i=0;i<GENERATION;i++){
+        Pre_Population=Read_File();
+        Post_Population=Evolution_Machine(Pre_Population);
+        Write_File(Post_Population);
+        free(Post_Population);
+        printf("Generation %d GENERATED!\n",i+1);
+    }
+    return 0;
+}
+int *Evaluation_Machine(Population_info Pre_Population)
+{
+    int  i = 0, j = 0;
+    int *AverageScore = (int*)malloc(sizeof(int)*POPULATION);
+    InitializeArray(AverageScore);//对averrage进行初始化为0
+    while(i < POPULATION ){
+        j = 0;
+        while( j < EVALUATION_TIME){
+            AverageScore[i] += Evaluation_Unit(Pre_Population[i]);
+            j++;
+        }
+        AverageScore[i] /= EVALUATION_TIME;
+        i++;
+    }
+    return AverageScore;
+}
+int Evaluation_Unit(int *Individual)
+{
+    int k = 0,index = 0,oper = 0,oper_rand = 0;
+    char Space[SIDE_LEN][SIDE_LEN] = {0};// 0代表无垃圾，1代表有垃圾
+    struct Node
+    {
+        int Dna[GEN_LEN];
+        int x,y;//所处位置坐标
+        int score;
+    }Indivi;
+    for(int i = 0; i < GEN_LEN; i++){
+        Indivi.Dna[i] = Individual[i];
+    }
+    Indivi.x = Indivi.y = Indivi.score = 0;
+    InitializeSpace(Space);
+    while(k < STEP_TIME){
+        index = CheckEnvironment(Indivi.x,Indivi.y,Space);
+        oper = Indivi.Dna[index];//从基因型中选取应对策略
+        switch(oper)
+        {
+            case 0:
+                if(Indivi.x == 0){
+                    Indivi.score += HIT;
+                }
+                else{
+                    Indivi.x -= 1;
+                }
+                break;
+            case 1:
+                if(Indivi.x == 9){
+                    Indivi.score += HIT;
+                }
+                else{
+                    Indivi.x += 1;
+                }
+                break;
+            case 2:
+                if(Indivi.y == 9){
+                    Indivi.score += HIT;
+                }
+                else{
+                    Indivi.y += 1;
+                }
+                break;
+            case 3:
+                if(Indivi.y == 0){
+                    Indivi.score += HIT;
+                }
+                else{
+                    Indivi.y -= 1;
+                }
+                break;
+            case 4:
+                oper_rand = rand()%4;
+                switch(oper_rand)
+                {
+                    case 0:
+                        if(Indivi.x == 0){
+                            Indivi.score += HIT;
+                        }
+                        else{
+                            Indivi.x -= 1;
+                        }
+                        break;
+                    case 1:
+                        if(Indivi.x == 9){
+                            Indivi.score += HIT;
+                        }
+                        else{
+                            Indivi.x += 1;
+                        }
+                        break;
+                    case 2:
+                        if(Indivi.y == 9){
+                            Indivi.score += HIT;
+                        }
+                        else{
+                            Indivi.y += 1;
+                        }
+                        break;
+                    case 3:
+                        if(Indivi.y == 0){
+                            Indivi.score += HIT;
+                        }
+                        else{
+                            Indivi.y -= 1;
+                        }
+                        break;
+                }
+                break;
+            case 5:
+                break;
+            case 6:
+                if(Space[Indivi.x][Indivi.y] == 1){
+                    Indivi.score += SUC;
+                    Space[Indivi.x][Indivi.y] = 0;
+                }
+                else
+                    Indivi.score += FAL;
+                break;
+        }
+        k++;
+    }
+    return Indivi.score;
+}
+int CheckEnvironment(int x,int y,char(*Space)[10])
+{
+    int index = 0; //按照 北 南 东 西 中 进行存储
+    if(x == 0){ //北面是 墙
+        index += 2;
+        index *= 3;
+    }
+    else if(Space[x-1][y] == 0){ //北面是 空的
+        index += 0;
+        index *= 3;
+    }
+    else if(Space[x-1][y] == 1){ //北面是易拉罐
+        index += 1;
+        index *= 3;
+    }
+    if(x == 9){ //南面是 墙
+        index += 2;
+        index *= 3;
+    }
+    else if(Space[x+1][y] == 0){ //南面是 空的
+        index += 0;
+        index *= 3;
+    }
+    else if(Space[x+1][y] == 1){ //南面是易拉罐
+        index += 1;
+        index *= 3;
+    }
+    if(y == 9){ //东面是 墙
+        index += 2;
+        index *= 3;
+    }
+    else if(Space[x][y+1] == 0){ //东面是 空的
+        index += 0;
+        index *= 3;
+    }
+    else if(Space[x][y+1] == 1){ //东面是易拉罐
+        index += 1;
+        index *= 3;
+    }
+    if(y == 0){ //西面是 墙
+        index += 2;
+        index *= 3;
+    }
+    else if(Space[x][y-1] == 0){ //西面是 空的
+        index += 0;
+        index *= 3;
+    }
+    else if(Space[x][y-1] == 1){ //北西面是易拉罐
+        index += 1;
+        index *= 3;
+    }
+    if(Space[x][y] == 0){ //当前是 空的
+        index += 0;
+    }
+    else if(Space[x][y] == 1){ //当前是易拉罐
+        index += 1;
+    }
+    return index;
+}
+void InitializeArray(int *Array)
+{
+    int i = 0;
+    while( i < POPULATION){
+        Array[i] = 0;
+        i++;
+    }
+}
+void InitializeSpace(char (*Space)[10])
+{
+    int i = 0, x = 0, y = 0;
+    while(i < TRASH_NUM){
+        x = rand()%10;
+        y = rand()%10;
+        if(Space[x][y] == 1)
+            continue;
+        Space[x][y] = 1;
+        i++;
+    }
+}
+void TournamentSelection(int *Score,int *choice)
+{
+    int i = 0, j = 0;
+    while(i < 2){
+        j = 0;
+        int random_individual[SELECTION_NUM] = {0};
+        while(j < SELECTION_NUM){
+            random_individual[j] = rand()%POPULATION; //第一步 得到随机抽取的selection_num个个体的编号
+            j++;
+        }
+        int max = 0;
+        for(int k = 1; k < SELECTION_NUM; k++){
+            if(Score[random_individual[max]] < Score[random_individual[k]])
+                max = k;
+        }
+        choice[i] = random_individual[max]; //第二步，从random 出来的个体选择适应度最高的进行保留作为亲本
+        i++;
+    }
+}
+void NodeMutation(Population_info Pre_Population)
+{
+    int i = 0, j = 0, mutation_num = 0,random_individual = 0, random_gene = 0;
+    while(i < POPULATION*MUTATION_P){
+        random_individual = rand()%POPULATION; //变异个体的编号
+        mutation_num = rand()%MUTATION_GEN_NUM+1; //突变基因个数
+        j = 0;
+        while(j < mutation_num){
+            random_gene = rand()%GEN_LEN;
+            Pre_Population[random_individual][random_gene] = rand()%7;
+            j++;
+        }
+        i++;
+    }
+}
+void Reverse(int head,int tail,int *individual)
+{
+    int *temp = (int*)malloc(sizeof(int)*(tail-head+1)), i = 0, j = 0;
+    for(i = tail,j = 0; i >= head; i--,j++)
+        temp[j] = individual[i];
+    for(i = head,j = 0; i <= tail; i++,j++)
+        individual[i] = temp[j];
+    free(temp);
+}
+void ReverseMutation(Population_info Pre_Population)
+{
+    int i = 0, random_individual = 0, head = 0, tail = 0, temp = 0;
+    while(i < POPULATION*MUTATION_P1){
+        random_individual = rand()%POPULATION; //变异个体编号
+        head = rand()%GEN_LEN;
+        tail = rand()%GEN_LEN;
+        if(head > tail){
+        temp = head;
+        head = tail;
+        tail = temp;
+        }
+        Reverse(head,tail,Pre_Population[random_individual]);
+        i++;
+    }
+}
+Population_info Multiplication_Machine(Population_info Pre_Population,int* Score)
+{
+    int Parent[2] = {0}, i = 2,CrossNode = 0;
+    int Next_Population[POPULATION][GEN_LEN] = {0};
+    int MaxScore = 0; //每代最优个体编号
+    for(int j = 0; j < POPULATION; j++)
+        if(Score[MaxScore] < Score[j])
+            MaxScore = j;
+    for(int j = 0; j < GEN_LEN; j++){
+        Next_Population[0][j] = Pre_Population[MaxScore][j]; //将最优个体直接复制到下一代
+        Next_Population[1][j] = rand()%7; //多出来一个个体 随机生成     ？？？？？是否影响进化？
+    }
+    while(i < POPULATION){
+        TournamentSelection(Score,Parent);  //得到父母编号
+        CrossNode = rand()%(GEN_LEN-20)+10;  //随机得到交叉结点 保证断点前后有10个基因 ？？？？是否影响？
+        for(int j = 0; j < CrossNode; j++){
+            Next_Population[i][j] = Pre_Population[Parent[0]][j];
+            Next_Population[i+1][j] = Pre_Population[Parent[1]][j];
+        }
+        for(int j = CrossNode; j < GEN_LEN; j++){
+            Next_Population[i+1][j] = Pre_Population[Parent[0]][j];
+            Next_Population[i][j] = Pre_Population[Parent[1]][j];
+        }
+        i += 2;
+    }
+    for(i = 0; i < POPULATION; i++)
+        for(int j = 0; j < GEN_LEN; j++)
+            Pre_Population[i][j] = Next_Population[i][j];
+    NodeMutation(Pre_Population); //位点变异
+    //ReverseMutation(Pre_Population); //逆转变异
+    free(Score);
+    return Pre_Population;
+}
